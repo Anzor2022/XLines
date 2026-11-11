@@ -1,0 +1,62 @@
+name: Build XLines Android
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+permissions:
+  contents: read
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+          cache: false
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: ''
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Install SDK and NDK
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'ndk;28.2.13676358'
+      - name: Build pinned libbox native engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          export GOMAXPROCS=2
+          export GOFLAGS=-p=2
+          git clone --depth 1 --branch v1.14.4 https://github.com/SagerNet/sing-box.git .core
+          cd .core
+          test "$(git rev-parse HEAD)" = 'c005f35300ce76427dc285481ec5695f5b179cd2'
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
+          go install github.com/sagernet/gomobile/cmd/gomobile
+          go install github.com/sagernet/gomobile/cmd/gobind
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          gomobile init
+          gomobile bind -v -o ../app/libs/libbox.aar -target android/arm64,android/amd64 -androidapi 24 -javapkg io.nekohasekai -libname box -ldflags "-checklinkname=0 -X github.com/sagernet/sing-box/constant.Version=1.14.4" -tags with_quic,with_utls,with_gvisor,with_clash_api,badlinkname,tfogo_checklinkname0 ./experimental/libbox
+          cd ..
+          test -s app/libs/libbox.aar
+      - name: Unit tests, lint and APK
+        run: gradle --no-daemon :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XLines-Android-debug
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Android-check-reports
+          path: |
+            app/build/reports/
+            app/build/test-results/
